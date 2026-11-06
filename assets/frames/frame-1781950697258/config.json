@@ -1,0 +1,39 @@
+{
+  "name": "アーチソフト",
+  "description": "",
+  "canvasWidth": 1080,
+  "canvasHeight": 1350,
+  "headline": {
+    "x": 72,
+    "y": 148,
+    "maxWidth": 780,
+    "fontSize": 82,
+    "fontWeight": "900",
+    "color": "#1a1a1a",
+    "lineHeight": 94.3,
+    "shadowBlur": 0,
+    "shadowColor": "rgba(0,0,0,0.2)"
+  },
+  "subtitle": {
+    "x": 52,
+    "y": 340,
+    "fontSize": 22,
+    "color": "#2a2a2a",
+    "letterSpacing": 3,
+    "vertical": true,
+    "maxChars": 50
+  },
+  "branding": {
+    "logoX": 944,
+    "logoY": 58,
+    "logoSize": 50,
+    "nameX": 200,
+    "nameY": 1302,
+    "nameFontSizeJa": 34,
+    "nameFontSizeEn": 15,
+    "nameColor": "#ffffff",
+    "nameEnX": 640,
+    "nameEnY1": 1293,
+    "nameEnY2": 1316
+  }
+}

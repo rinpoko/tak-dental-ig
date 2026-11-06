@@ -1,0 +1,225 @@
+/* Web build additions on top of the Mac app's style.css. */
+
+/* Desktop-only actions: project files need the Electron file dialogs, Finder is the Mac's,
+   and the Ollama fallback needs a local server. */
+#btnOpenProject,
+#btnSaveProject,
+#btnOpenOutput,
+.form-group:has(#modelSelect) {
+  display: none !important;
+}
+
+/* Touch screens have no hover: the post canvas takes drags, and the frame delete button would
+   sit right where a tap selects the frame. */
+@media (hover: none) {
+  #editPreviewCanvas {
+    touch-action: none;
+  }
+
+  .frame-card .frame-delete {
+    display: none;
+  }
+}
+
+/* Save sheet */
+#webSaveSheet {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.web-save-panel {
+  width: 100%;
+  max-width: 480px;
+  max-height: 88dvh;
+  overflow-y: auto;
+  padding: 20px 16px calc(16px + env(safe-area-inset-bottom));
+  border-radius: 16px 16px 0 0;
+  background: #fff;
+  color: #222;
+}
+
+.web-save-title {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.web-save-hint {
+  margin: 12px 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #666;
+}
+
+.web-save-thumbs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.web-save-thumbs img {
+  flex: 0 0 auto;
+  max-width: 100%;
+  max-height: 44dvh;
+  border-radius: 8px;
+  border: 1px solid #ddd;
+}
+
+.web-save-thumbs img:not(:only-child) {
+  max-width: 62%;
+}
+
+.web-save-primary,
+.web-save-close {
+  display: block;
+  width: 100%;
+  min-height: 48px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.web-save-primary {
+  background: #e07f8c;
+  color: #fff;
+}
+
+.web-save-close {
+  margin-top: 8px;
+  background: transparent;
+  color: #666;
+}
+
+@media (max-width: 900px) {
+  html,
+  body {
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* iOS zooms the page when a focused field's text is under 16px. */
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  header {
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .header-inner {
+    flex-wrap: wrap;
+    gap: 6px;
+    height: auto;
+    padding: 8px 16px;
+  }
+
+  .header-logo svg {
+    width: 28px;
+    height: 32px;
+  }
+
+  .header-logo span {
+    font-size: 14px;
+  }
+
+  .header-right {
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  main {
+    display: block;
+    padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+  }
+
+  .col-left,
+  .col-center,
+  .col-right {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    margin-bottom: 12px;
+  }
+
+  .col-left .step:has(#frameGrid) .frame-grid {
+    overflow: visible;
+  }
+
+  .modal-overlay {
+    align-items: stretch;
+    padding: 0;
+  }
+
+  .modal {
+    width: 100% !important;
+    max-width: none !important;
+    max-height: 100dvh !important;
+    height: 100dvh;
+    border-radius: 0;
+    padding-top: env(safe-area-inset-top);
+  }
+
+  .modal-body {
+    display: block;
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .modal-footer {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+
+  .modal-left,
+  .modal-right {
+    width: auto;
+    min-width: 0;
+  }
+
+  .font-mgr-lists {
+    grid-template-columns: 1fr;
+  }
+
+  /* Flatten the two columns so the preview sits right after the screenshot import. */
+  .cal-body {
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px;
+    flex: 1;
+  }
+
+  .cal-controls {
+    display: contents;
+  }
+
+  .cal-month { order: 1; }
+  .cal-drop { order: 2; }
+  .cal-summary, .cal-warning, .cal-thumb, #calReview { order: 3; }
+  .cal-preview { order: 4; width: 100%; }
+  .cal-setting, #calExport, .cal-caption { order: 5; }
+
+  .cal-thumb {
+    align-self: center;
+    width: auto;
+    height: auto;
+    max-height: 150px;
+    object-fit: contain;
+  }
+
+  .cal-setting {
+    flex-shrink: 0;
+  }
+
+  .cal-setting input {
+    flex: 0 1 140px;
+    width: 140px;
+  }
+}
