@@ -108,20 +108,14 @@
     } catch { /* Offline: the calculated holidays still apply. */ }
   }
 
-  /* ── Clinic rules: 月火水金 終日 / 木 午前のみ（祝日のある週は終日）/ 土 午前のみ / 日祝 休み ── */
-  function weekHasHoliday(y, m, d, table) {
-    const t = Date.UTC(y, m - 1, d);
-    const monday = t - ((weekdayOf(y, m, d) + 6) % 7) * 86400000;
-    for (let i = 0; i < 7; i++) if (table[keyOf(new Date(monday + i * 86400000))]) return true;
-    return false;
-  }
+  /* ── Clinic rules: 日祝 休み / 土 午前のみ / 平日は Apotool の表示どおり ──
+     赤・青の付いていない平日は終日診療として扱う。公式サイトの木曜の案内より Apotool を優先する（院長確認済み）。 */
 
   function baseStatus({ year, month }, day, table) {
     if (table[dateKey(year, month, day)]) return 'closed';
     switch (weekdayOf(year, month, day)) {
       case 0: return 'closed';
       case 6: return 'afternoonClosed';
-      case 4: return weekHasHoliday(year, month, day, table) ? 'open' : 'afternoonClosed';
       default: return 'open';
     }
   }
