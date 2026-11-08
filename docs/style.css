@@ -2279,3 +2279,12 @@ input[type="color"] {
   background: rgba(229,85,85,0.12);
   color: #ff8a8a;
 }
+
+/* ── Drop shadow controls (headline / subtitle / custom text) ── */
+.shadow-ctrl, .shadow-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.shadow-detail[hidden] { display: none; }
+.ct-settings .shadow-ctrl { margin-bottom: 8px; }

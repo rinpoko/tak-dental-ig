@@ -951,6 +951,8 @@ function syncTextStyleUI() {
   document.getElementById('ctrlSubYVal').textContent    = ts.subY;
   document.getElementById('ctrlSubHoriz').classList.toggle('active', !ts.subtitleVertical);
   document.getElementById('ctrlSubVert').classList.toggle('active',   ts.subtitleVertical);
+  syncShadowUI('ctrlHl', ts.shadow);
+  syncShadowUI('ctrlSub', ts.subShadow);
 }
 
 /* ── Switch active photo and sync all UI ── */
@@ -991,6 +993,8 @@ function snapshotLayout(photo) {
     headlineVertical: ts.headlineVertical, arcRadius: ts.arcRadius,
     whiteBg: ts.whiteBg, whiteBgColor: ts.whiteBgColor, whiteBgPad: ts.whiteBgPad,
     whiteBgEndTrims: ts.whiteBgEndTrims ? { ...ts.whiteBgEndTrims } : {},
+    shadow: { ...DEFAULT_SHADOW, ...(ts.shadow || {}) },
+    subShadow: { ...DEFAULT_SHADOW, ...(ts.subShadow || {}) },
     letterSpacing: ts.letterSpacing, lineSpacing: ts.lineSpacing,
     charKerns: ts.charKerns ? { ...ts.charKerns } : {},
     showSubtitle: ts.showSubtitle, subX: ts.subX, subY: ts.subY,
@@ -1004,6 +1008,7 @@ function snapshotLayout(photo) {
       charKerns: { ...(t.charKerns || {}) },
       whiteBg: t.whiteBg, whiteBgColor: t.whiteBgColor, whiteBgPad: t.whiteBgPad,
       whiteBgEndTrims: { ...(t.whiteBgEndTrims || {}) },
+      shadow: { ...DEFAULT_SHADOW, ...(t.shadow || {}) },
     })),
   };
 }
@@ -1016,6 +1021,7 @@ function applyLayoutSnapshot(photo, snap) {
       headlineVertical: snap.headlineVertical, arcRadius: snap.arcRadius,
       whiteBg: snap.whiteBg, whiteBgColor: snap.whiteBgColor, whiteBgPad: snap.whiteBgPad,
       whiteBgEndTrims: { ...snap.whiteBgEndTrims },
+      shadow: { ...snap.shadow }, subShadow: { ...snap.subShadow },
       letterSpacing: snap.letterSpacing, lineSpacing: snap.lineSpacing,
       charKerns: { ...snap.charKerns },
       showSubtitle: snap.showSubtitle, subX: snap.subX, subY: snap.subY,
@@ -1041,6 +1047,7 @@ function applyLayoutSnapshot(photo, snap) {
       charKerns: { ...(s.charKerns || {}) },
       whiteBg: s.whiteBg, whiteBgColor: s.whiteBgColor, whiteBgPad: s.whiteBgPad,
       whiteBgEndTrims: { ...(s.whiteBgEndTrims || {}) },
+      shadow: { ...DEFAULT_SHADOW, ...(s.shadow || {}) },
     });
   });
 }
@@ -1233,6 +1240,7 @@ async function drawEditPreview() {
     ctx.save();
     ctx.fillStyle = ts.color;
     ctx.textBaseline = 'top';
+    applyTextShadow(ctx, ts.shadow, S);
     drawCharLayout(ctx, hlLayout, fontSizePx);
     ctx.restore();
 
@@ -1276,6 +1284,7 @@ async function drawEditPreview() {
       ctx.save();
       ctx.fillStyle = ts.subColor || subFrameCfg.color || '#2a2a2a';
       ctx.font = `${ts.subtitleFontWeight || '400'} ${subSz}px ${subFamily}`;
+      applyTextShadow(ctx, ts.subShadow, S);
       const subDims = renderSubtitleLines(ctx, ts.subtitle, subX, subY, subSz, subLS, (subFrameCfg.letterSpacing ?? 3) * S, subLineSpacingPct, ts.subtitleVertical, true);
       ctx.restore();
       state._subDims = subDims;
@@ -1352,6 +1361,7 @@ async function drawEditPreview() {
       ctx.save();
       ctx.fillStyle = t.color;
       ctx.textBaseline = 'top';
+      applyTextShadow(ctx, t.shadow, S);
       drawCharLayout(ctx, layoutT, fsT);
       ctx.restore();
 
@@ -1598,6 +1608,26 @@ function layoutHeadlineArc(ctx, text, cx, cy, radius, letterSpacing, lineHeight,
 // Draw all chars from a layout (handles vertical punctuation orientation and arched
 // rotation). Arched chars are drawn centred on (x,y) — the point on the arc — then
 // rotated locally, rather than using (x,y) as a top-left corner like horizontal text.
+/* ── Drop shadow (headline: ts.shadow / subtitle: ts.subShadow / custom text: t.shadow) ──
+   Values live in 1080-space; S scales blur/offset to the preview canvas.
+   Canvas shadow offsets ignore the transform, so the shadow falls the same
+   way for 横書き, 縦書き and アーチ text. */
+const DEFAULT_SHADOW = { on: false, color: '#000000', opacity: 50, blur: 12, x: 4, y: 4 };
+const SHADOW_SLIDERS = [
+  ['opacity', '濃さ',    0, 100, '%'],
+  ['blur',    'ぼかし',  0,  60, ''],
+  ['x',       'ずらし X', -40, 40, ''],
+  ['y',       'ずらし Y', -40, 40, ''],
+];
+function applyTextShadow(ctx, sh, S = 1) {
+  if (!sh || !sh.on) return;
+  const n = parseInt((sh.color || '#000000').slice(1), 16) || 0;
+  ctx.shadowColor = `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${(sh.opacity ?? 50) / 100})`;
+  ctx.shadowBlur = (sh.blur ?? 0) * S;
+  ctx.shadowOffsetX = (sh.x ?? 0) * S;
+  ctx.shadowOffsetY = (sh.y ?? 0) * S;
+}
+
 function drawCharLayout(ctx, layout, fontSize) {
   for (const it of layout) {
     if (it.rotation) {
@@ -2462,6 +2492,7 @@ async function compositeImageFor(photo, frame) {
   ctx.save();
   ctx.fillStyle = ts.color;
   ctx.textBaseline = 'top';
+  applyTextShadow(ctx, ts.shadow);
   drawCharLayout(ctx, hlLayout, ts.fontSize);
   ctx.restore();
 
@@ -2475,6 +2506,7 @@ async function compositeImageFor(photo, frame) {
     ctx.save();
     ctx.fillStyle = ts.subColor || sub.color || '#333';
     ctx.font = `${ts.subtitleFontWeight || '400'} ${subSz}px ${subFamily}`;
+    applyTextShadow(ctx, ts.subShadow);
     renderSubtitleLines(ctx, ts.subtitle, ts.subX, ts.subY, subSz, subLS, sub.letterSpacing ?? 3, subLineSpacingPct, ts.subtitleVertical, true);
     ctx.restore();
   }
@@ -2497,6 +2529,7 @@ async function compositeImageFor(photo, frame) {
     ctx.save();
     ctx.fillStyle = t.color;
     ctx.textBaseline = 'top';
+    applyTextShadow(ctx, t.shadow);
     drawCharLayout(ctx, layoutT, t.fontSize);
     ctx.restore();
   }
@@ -3504,6 +3537,7 @@ function renderCtSettings() {
   document.getElementById('ctMaxWVal').textContent = t.maxWidth;
   document.getElementById('ctHoriz').classList.toggle('active', !t.vertical);
   document.getElementById('ctVert').classList.toggle('active', !!t.vertical);
+  syncShadowUI('ct', t.shadow);
 }
 
 /* Per-line/column whiteBg trim sliders for the selected custom text —
@@ -3589,6 +3623,68 @@ bindCtSlider('ctLineSpacing', 'ctLineSpacingVal', 'lineSpacing', '%');
 bindCtSlider('ctPosX', 'ctPosXVal', 'x');
 bindCtSlider('ctPosY', 'ctPosYVal', 'y');
 bindCtSlider('ctMaxW', 'ctMaxWVal', 'maxWidth');
+
+/* ── Drop shadow controls — one identical block for each kind of text ── */
+function mountShadowControls(p, mountId, getOwner, key) {
+  const mount = document.getElementById(mountId);
+  mount.innerHTML = `
+    <div class="edit-ctrl-row">
+      <label>ドロップシャドウ</label>
+      <label class="toggle"><input type="checkbox" id="${p}ShOn"><span class="toggle-track"></span></label>
+    </div>
+    <div class="shadow-detail" id="${p}ShDetail" hidden>
+      <div class="edit-ctrl-row">
+        <label>影の色</label>
+        <div class="color-row">
+          <input type="color" id="${p}ShColor" value="#000000">
+          <input type="text" class="color-text" id="${p}ShColorText" value="#000000" maxlength="7">
+        </div>
+      </div>
+      ${SHADOW_SLIDERS.map(([f, label, min, max]) => `
+      <div class="edit-ctrl-row">
+        <label>${label}</label>
+        <input type="range" id="${p}Sh_${f}" min="${min}" max="${max}" value="${DEFAULT_SHADOW[f]}">
+        <span class="ctrl-val" id="${p}Sh_${f}Val">${DEFAULT_SHADOW[f]}</span>
+      </div>`).join('')}
+    </div>`;
+  // Writes create the shadow object on first use, so older projects without
+  // it keep working.
+  const edit = fn => {
+    const owner = getOwner();
+    if (!owner) return;
+    owner[key] = { ...DEFAULT_SHADOW, ...(owner[key] || {}) };
+    fn(owner[key]);
+    schedulePreviewRedraw();
+  };
+  document.getElementById(`${p}ShOn`).addEventListener('change', e => {
+    document.getElementById(`${p}ShDetail`).hidden = !e.target.checked;
+    edit(sh => { sh.on = e.target.checked; });
+  });
+  for (const [f, , , , suffix] of SHADOW_SLIDERS) {
+    const slider = document.getElementById(`${p}Sh_${f}`);
+    slider.addEventListener('input', () => {
+      document.getElementById(`${p}Sh_${f}Val`).textContent = slider.value + suffix;
+      edit(sh => { sh[f] = +slider.value; });
+    });
+  }
+  syncColor(`${p}ShColor`, `${p}ShColorText`, () => {
+    edit(sh => { sh.color = document.getElementById(`${p}ShColor`).value; });
+  });
+}
+function syncShadowUI(p, shadow) {
+  const sh = { ...DEFAULT_SHADOW, ...(shadow || {}) };
+  document.getElementById(`${p}ShOn`).checked = !!sh.on;
+  document.getElementById(`${p}ShDetail`).hidden = !sh.on;
+  document.getElementById(`${p}ShColor`).value = sh.color;
+  document.getElementById(`${p}ShColorText`).value = sh.color;
+  for (const [f, , , , suffix] of SHADOW_SLIDERS) {
+    document.getElementById(`${p}Sh_${f}`).value = sh[f];
+    document.getElementById(`${p}Sh_${f}Val`).textContent = sh[f] + suffix;
+  }
+}
+mountShadowControls('ctrlHl',  'ctrlHlShadowMount',  () => state.textStyle, 'shadow');
+mountShadowControls('ctrlSub', 'ctrlSubShadowMount', () => state.textStyle, 'subShadow');
+mountShadowControls('ct',      'ctShadowMount',      () => selectedText(),  'shadow');
 
 document.getElementById('ctFont').addEventListener('change', e => {
   const t = selectedText();
