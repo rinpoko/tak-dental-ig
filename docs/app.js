@@ -168,25 +168,33 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-ove
 dropZone.addEventListener('drop', e => {
   e.preventDefault();
   dropZone.classList.remove('drag-over');
-  handleFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/')));
+  handleFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/') || isVideoFile(f)));
 });
-photoInput.addEventListener('change', () => handleFiles([...photoInput.files]));
+photoInput.addEventListener('change', () => { handleFiles([...photoInput.files]); photoInput.value = ''; });
 
-function handleFiles(files) {
-  files.forEach(file => state.photos.push({
-    file, url: URL.createObjectURL(file),
-    filter: 'normal', brightness: 100, contrast: 100,
-    frameId: null, offset: { x: 0, y: 0 }, scale: 1.0, rotation: 0,
-    bgColor: '#ffffff',
-    frameHue: 0, frameSat: 100,
-    textStyle: null,
-    icons: [],
-    texts: [],
-  }));
-  if (state.photos.length === files.length) {
-    // First batch: activate the first photo
-    state.previewPhotoIdx = 0;
+// Images and videos (video.js) go into the same list, in the order chosen.
+async function handleFiles(files) {
+  const wasEmpty = !state.photos.length;
+  for (const file of files) {
+    if (isVideoFile(file)) {
+      const photo = await createVideoPhoto(file);
+      if (photo) state.photos.push(photo);
+    } else if (file.type.startsWith('image/')) {
+      state.photos.push({
+        file, url: URL.createObjectURL(file),
+        filter: 'normal', brightness: 100, contrast: 100,
+        frameId: null, offset: { x: 0, y: 0 }, scale: 1.0, rotation: 0,
+        bgColor: '#ffffff',
+        frameHue: 0, frameSat: 100,
+        textStyle: null,
+        icons: [],
+        texts: [],
+      });
+    }
+    renderThumbs();
   }
+  // First batch: activate the first photo
+  if (wasEmpty) state.previewPhotoIdx = 0;
   renderThumbs();
   updateGenerateBtn();
 }
@@ -206,6 +214,7 @@ function renderThumbs() {
     div.innerHTML = `
       <img src="${p.url}" alt="" style="filter:${buildFilterStringFor(p)}">
       <span class="thumb-badge">${i + 1}</span>
+      ${isVideoPhoto(p) ? `<span class="thumb-video-badge">▶ ${fmtVideoTime(videoDuration(p))}</span>` : ''}
       ${assignedFrame ? `<span class="thumb-frame-badge">${escHtml(assignedFrame.name.slice(0, 8))}</span>` : ''}
       <button class="thumb-remove">×</button>
     `;
@@ -1123,6 +1132,25 @@ function renderBgTrimSliders() {
   }).join('');
 }
 
+/* ── 背景の写真: background colour, then the photo (or a video frame) with the
+   per-photo filter, offset, scale and rotation. S = canvas px per 1080-space unit.
+   The colour shows once zoom shrinks the photo below the frame-filling 100%. ── */
+function drawPhotoLayer(ctx, photo, img, W, H, S) {
+  ctx.fillStyle = photo.bgColor || '#ffffff';
+  ctx.fillRect(0, 0, W, H);
+  const iw = img?.videoWidth || img?.width, ih = img?.videoHeight || img?.height;
+  if (!iw || !ih) return;
+  const sc = Math.max(W / iw, H / ih) * photo.scale;
+  const pw = iw * sc, ph = ih * sc;
+  const filterStr = buildFilterStringFor(photo);
+  ctx.save();
+  if (filterStr !== 'none') ctx.filter = filterStr;
+  ctx.translate(W / 2 + photo.offset.x * S, H / 2 + photo.offset.y * S);
+  ctx.rotate((photo.rotation || 0) * Math.PI / 180);
+  ctx.drawImage(img, -pw / 2, -ph / 2, pw, ph);
+  ctx.restore();
+}
+
 async function drawEditPreview() {
   const canvas = editPreviewCanvas;
   const ctx    = canvas.getContext('2d');
@@ -1150,26 +1178,9 @@ async function drawEditPreview() {
     // tagged with the text it belongs to (ownerId null = headline).
     state._bgRects = [];
 
-    // Background colour — visible once zoom shrinks the photo below the
-    // frame-filling default (100%), revealing the canvas behind it.
-    ctx.fillStyle = activePhoto.bgColor || '#ffffff';
-    ctx.fillRect(0, 0, W, H);
-
-    // Photo with per-photo filter, offset, scale, rotation
-    const photoImg = await cachedImg(activePhoto.url);
-    const baseSc = Math.max(W / photoImg.width, H / photoImg.height);
-    const sc = baseSc * activePhoto.scale;
-    const pw = photoImg.width * sc, ph = photoImg.height * sc;
-    const pcx = W / 2 + activePhoto.offset.x * S;
-    const pcy = H / 2 + activePhoto.offset.y * S;
-    const rot = (activePhoto.rotation || 0) * Math.PI / 180;
-    const filterStr = buildFilterStringFor(activePhoto);
-    ctx.save();
-    if (filterStr !== 'none') ctx.filter = filterStr;
-    ctx.translate(pcx, pcy);
-    ctx.rotate(rot);
-    ctx.drawImage(photoImg, -pw / 2, -ph / 2, pw, ph);
-    ctx.restore();
+    // Photo (or the video frame at the playhead) over the background colour
+    const photoImg = videoFrameFor(activePhoto) || await cachedImg(activePhoto.url);
+    drawPhotoLayer(ctx, activePhoto, photoImg, W, H, S);
 
     // Frame overlay with hue/sat filter — headline/subtitle/icons below are
     // independent of this and still render even when no frame is assigned.
@@ -2475,14 +2486,31 @@ btnComposite.addEventListener('click', async () => {
 
   // A frame is optional — headline/subtitle/icons render regardless, the frame
   // overlay is simply skipped for photos where none is assigned.
-  for (const photo of state.photos) {
+  const total = state.photos.length;
+  for (const [n, photo] of state.photos.entries()) {
     if (!photo.textStyle) continue;
     const frame = photo.frameId ? state.availableFrames.find(f => f.id === photo.frameId) : null;
+    const frameName = frame ? frame.name : 'フレームなし';
     try {
-      const dataUrl = await compositeImageFor(photo, frame);
-      state.generatedImages.push({ dataUrl, frameName: frame ? frame.name : 'フレームなし' });
+      if (isVideoPhoto(photo)) {
+        const where = total > 1 ? `（${n + 1} / ${total}）` : '';
+        loadingMsg.textContent = `動画を書き出し中… 0%${where}`;
+        const out = await renderVideoPost(photo, frame, f => {
+          loadingMsg.textContent = `動画を書き出し中… ${Math.round(f * 100)}%${where}`;
+        });
+        if (out.audioNote) showToast(out.audioNote, 4500);
+        state.generatedImages.push({
+          dataUrl: out.stillDataUrl, frameName,
+          video: { blob: out.blob, url: URL.createObjectURL(out.blob), duration: out.duration },
+        });
+        loadingMsg.textContent = '画像を合成中…';
+      } else {
+        const dataUrl = await compositeImageFor(photo, frame);
+        state.generatedImages.push({ dataUrl, frameName });
+      }
     } catch (err) {
       console.error('composite error', err);
+      if (isVideoPhoto(photo)) { showToast('動画の書き出しに失敗しました: ' + err.message, 5000); }
     }
   }
 
@@ -2500,7 +2528,9 @@ btnReEdit.addEventListener('click', () => setOutput('editing'));
 /* ════════════════════════════════════════
    Canvas compositing (full resolution) — per photo
    ════════════════════════════════════════ */
-async function compositeImageFor(photo, frame) {
+// opts.layersOnly: transparent canvas with only what sits above 背景の写真
+// (frame, texts, icons) — video export draws it over every frame.
+async function compositeImageFor(photo, frame, opts = {}) {
   const cfg = frame?.config || {};
   const W   = cfg.canvasWidth  || 1080;
   const H   = cfg.canvasHeight || 1350;
@@ -2514,26 +2544,7 @@ async function compositeImageFor(photo, frame) {
   canvas.height = H;
   const ctx = canvas.getContext('2d');
 
-  // Background colour — visible once zoom shrinks the photo below the
-  // frame-filling default (100%), revealing the canvas behind it.
-  ctx.fillStyle = photo.bgColor || '#ffffff';
-  ctx.fillRect(0, 0, W, H);
-
-  // Photo with per-photo filter, offset, scale, rotation
-  const photoImg = await loadImg(photo.url);
-  const baseSc = Math.max(W / photoImg.width, H / photoImg.height);
-  const sc = baseSc * photo.scale;
-  const pw = photoImg.width * sc, ph = photoImg.height * sc;
-  const pcx = W / 2 + photo.offset.x;
-  const pcy = H / 2 + photo.offset.y;
-  const rot = (photo.rotation || 0) * Math.PI / 180;
-  const filterStr = buildFilterStringFor(photo);
-  ctx.save();
-  if (filterStr !== 'none') ctx.filter = filterStr;
-  ctx.translate(pcx, pcy);
-  ctx.rotate(rot);
-  ctx.drawImage(photoImg, -pw / 2, -ph / 2, pw, ph);
-  ctx.restore();
+  if (!opts.layersOnly) drawPhotoLayer(ctx, photo, await loadImg(photo.url), W, H, 1);
 
   // Frame overlay with per-photo hue/sat filter — headline/subtitle/icons
   // below are independent of this and still render without a frame.
@@ -2622,6 +2633,7 @@ async function compositeImageFor(photo, frame) {
     drawPlacedIcon(ctx, iconImg, icon, 1);
   }
 
+  if (opts.layersOnly) return canvas;
   return canvas.toDataURL('image/jpeg', 0.92);
 }
 
@@ -2687,19 +2699,33 @@ function loadImg(src) {
    ════════════════════════════════════════ */
 function renderResults() {
   resultImages.innerHTML = '';
-  state.generatedImages.forEach(({ dataUrl, frameName }, i) => {
+  state.generatedImages.forEach(({ dataUrl, frameName, video }, i) => {
     const card = document.createElement('div');
-    card.className = 'result-img-card';
-    card.innerHTML = `
-      <img src="${dataUrl}" alt="post ${i + 1}">
-      <div class="img-label">${frameName}</div>
-    `;
-    card.addEventListener('click', () => {
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = `post_${i + 1}.jpg`;
-      a.click();
-    });
+    card.className = 'result-img-card' + (video ? ' is-video' : '');
+    if (video) {
+      // The video plays in place; the label below saves the MP4.
+      card.innerHTML = `
+        <video src="${video.url}" poster="${dataUrl}" controls playsinline loop preload="metadata"></video>
+        <button type="button" class="img-label result-save-video">▶ 動画 ${fmtVideoTime(video.duration)} ・ ${escHtml(frameName)} ・ MP4を保存</button>
+      `;
+      card.querySelector('.result-save-video').addEventListener('click', () => {
+        const a = document.createElement('a');
+        a.href = video.url;
+        a.download = `post_${i + 1}.mp4`;
+        a.click();
+      });
+    } else {
+      card.innerHTML = `
+        <img src="${dataUrl}" alt="post ${i + 1}">
+        <div class="img-label">${frameName}</div>
+      `;
+      card.addEventListener('click', () => {
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `post_${i + 1}.jpg`;
+        a.click();
+      });
+    }
     resultImages.appendChild(card);
   });
 }
@@ -2723,10 +2749,20 @@ btnDownload.addEventListener('click', async () => {
         console.error('mockup render error', err);
       }
     }
+    // Videos travel separately (too big for the JSON body); the ZIP gets
+    // post_N.mp4 in their place.
+    const videos = [];
+    for (const g of state.generatedImages) {
+      if (!g.video) { videos.push(null); continue; }
+      const up = await fetch('/api/video-upload', { method: 'POST', headers: { 'Content-Type': 'video/mp4' }, body: g.video.blob });
+      if (!up.ok) throw new Error('動画の保存に失敗しました');
+      videos.push((await up.json()).token);
+    }
     const res = await fetch('/api/download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
+        videos,
         images: state.generatedImages.map(i => i.dataUrl),
         captions: (state.generatedCopy?.captions || []).map((_, i) => captionWithHashtags(i)),
         mockups,
@@ -3884,6 +3920,9 @@ async function collectProjectData() {
     const frame = p.frameId ? state.availableFrames.find(f => f.id === p.frameId) : null;
     photos.push({
       dataUrl,
+      kind: p.kind,
+      video: p.video ? JSON.parse(JSON.stringify(p.video)) : undefined,
+      bgColor: p.bgColor,
       filter: p.filter,
       brightness: p.brightness,
       contrast: p.contrast,
@@ -3912,6 +3951,14 @@ async function collectProjectData() {
     previewPhotoIdx: state.previewPhotoIdx,
     photos,
   };
+}
+
+// Project + the video files it uses (written under videos/ in the bundle).
+async function collectProjectWithVideos() {
+  const project = await collectProjectData();
+  const { meta, files } = await collectVideoSources();
+  if (meta.length) project.videoSources = meta;
+  return { project, videoFiles: files };
 }
 
 // Re-register a frame from its embedded snapshot (used when opening a
@@ -3963,10 +4010,11 @@ function resetProject() {
   resetHistory();
 }
 
-async function applyProjectData(project) {
+async function applyProjectData(project, videoBytes = {}) {
   if (!project || project.takFormat !== TAK_FORMAT) {
     throw new Error('無効なプロジェクトファイルです');
   }
+  await restoreVideoSources(project.videoSources, videoBytes);
 
   state.photos.forEach(p => { if (p.url?.startsWith('blob:')) URL.revokeObjectURL(p.url); });
   state.photos = [];
@@ -4005,9 +4053,14 @@ async function applyProjectData(project) {
     if (frameId && !state.availableFrames.some(f => f.id === frameId)) {
       frameId = sp.frameSnapshot ? await recreateFrameFromSnapshot(sp.frameSnapshot) : null;
     }
+    // A video whose files didn't come along opens as its still image.
+    const clips = (sp.kind === 'video' && sp.video?.clips || []).filter(c => videoSources.has(c.srcId));
+    const video = clips.length ? { ...JSON.parse(JSON.stringify(sp.video)), clips, uid: newId('v') } : null;
     state.photos.push({
+      ...(video ? { kind: 'video', video } : {}),
       file: null,
       url: sp.dataUrl,
+      bgColor: sp.bgColor || '#ffffff',
       filter: sp.filter || 'normal',
       brightness: sp.brightness ?? 100,
       contrast: sp.contrast ?? 100,
@@ -4075,25 +4128,27 @@ async function saveProjectFlow(forceSaveAs) {
   if (!window.electronAPI) { showToast('この機能はデスクトップアプリでのみ利用できます'); return; }
   if (!state.photos.length) { showToast('保存する内容がありません'); return; }
   try {
-    const projectObj = await collectProjectData();
+    const { project: projectObj, videoFiles } = await collectProjectWithVideos();
     const images = extractBundleImages(projectObj);
     const jsonString = JSON.stringify(projectObj);
     const result = await window.electronAPI.saveProjectBundle(
-      jsonString, images, state.currentProjectPath, !!forceSaveAs
+      jsonString, images, state.currentProjectPath, !!forceSaveAs, videoFiles
     );
     if (result.canceled) return;
     if (result.error) { showToast('保存に失敗しました: ' + result.error, 4000); return; }
     state.currentProjectPath = result.filePath;
-    showToast(`プロジェクトフォルダに保存しました（画像${images.length}点を同梱）`);
+    const vids = videoFiles.length ? `・動画${videoFiles.length}点` : '';
+    showToast(`プロジェクトフォルダに保存しました（画像${images.length}点${vids}を同梱）`);
   } catch (err) {
     showToast('保存に失敗しました: ' + err.message, 4000);
   }
 }
 
-async function loadProjectFromContent(content, filePath) {
+async function loadProjectFromContent(content, filePath, videos) {
   try {
     const project = JSON.parse(content);
-    await applyProjectData(project);
+    if (project.videoSources?.length) showToast('動画を読み込んでいます…', 2000);
+    await applyProjectData(project, videos);
     state.currentProjectPath = filePath || null;
     showToast('プロジェクトを開きました');
   } catch (err) {
@@ -4106,14 +4161,14 @@ async function openProjectFlow() {
   const result = await window.electronAPI.openProject();
   if (result.canceled) return;
   if (result.error) { showToast('開けませんでした: ' + result.error, 4000); return; }
-  await loadProjectFromContent(result.content, result.filePath);
+  await loadProjectFromContent(result.content, result.filePath, result.videos);
 }
 
 btnSaveProject.addEventListener('click', () => saveProjectFlow(false));
 btnOpenProject.addEventListener('click', () => openProjectFlow());
 
 if (window.electronAPI) {
-  window.electronAPI.onLoadProject(({ content, filePath }) => loadProjectFromContent(content, filePath));
+  window.electronAPI.onLoadProject(({ content, filePath, videos }) => loadProjectFromContent(content, filePath, videos));
   window.electronAPI.onMenuNewProject(() => {
     if (!state.photos.length || confirm('保存されていない変更は失われます。新規プロジェクトを開始しますか？')) {
       resetProject();
@@ -4150,7 +4205,7 @@ const HEADLINE_KEYS = ['headline', 'fontFamily', 'fontWeight', 'fontSize', 'colo
   'letterSpacing', 'lineSpacing', 'charKerns', 'shadow'];
 const SUBTITLE_KEYS = ['subtitle', 'showSubtitle', 'subX', 'subY', 'subColor', 'subtitleVertical',
   'subtitleFontFamily', 'subtitleFontWeight', 'subFontSize', 'subLetterSpacing', 'subLineSpacing', 'subShadow'];
-const PHOTO_KEYS = ['file', 'url', 'filter', 'brightness', 'contrast', 'offset', 'scale', 'rotation', 'bgColor'];
+const PHOTO_KEYS = ['file', 'url', 'kind', 'video', 'filter', 'brightness', 'contrast', 'offset', 'scale', 'rotation', 'bgColor'];
 const EL_LABEL = { photo: '背景の写真', headline: 'キャッチコピー', subtitle: 'サブタイトル', icon: 'アイコン', text: '追加テキスト' };
 const CLIP_MARK = 'tak-dental-ig-element:';
 
@@ -4212,6 +4267,9 @@ function pasteElement(clip) {
     syncTextStyleUI();
   } else if (clip.type === 'photo') {
     Object.assign(photo, data, { file: clip.data.file });
+    // A photo pasted onto a video (or the other way round) changes its kind.
+    if (!data.kind) { delete photo.kind; delete photo.video; }
+    if (photo.video) photo.video.uid = newId('v');
     state.selectedEl = { type: 'photo' };
     syncFilterUI(photo);
     renderThumbs();
@@ -4290,6 +4348,7 @@ function editorSnapshot() {
       textStyle: p.textStyle ? deepCopy(p.textStyle) : null,
       icons: deepCopy(p.icons || []),
       texts: deepCopy(p.texts || []),
+      video: p.video ? deepCopy(p.video) : undefined,
     })),
   };
 }
@@ -4351,6 +4410,7 @@ function restoreSnapshot(snap, showIdx = snap.idx) {
     textStyle: p.textStyle ? deepCopy(p.textStyle) : null,
     icons: deepCopy(p.icons),
     texts: deepCopy(p.texts),
+    video: p.video ? deepCopy(p.video) : undefined,
   }));
   const idx = Math.max(0, Math.min(showIdx, state.photos.length - 1));
   // Keep a selection only if what it points at still exists.

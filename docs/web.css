@@ -62,7 +62,8 @@
   overflow-x: auto;
 }
 
-.web-save-thumbs img {
+.web-save-thumbs img,
+.web-save-thumbs video {
   flex: 0 0 auto;
   max-width: 100%;
   max-height: 44dvh;
@@ -70,7 +71,8 @@
   border: 1px solid #ddd;
 }
 
-.web-save-thumbs img:not(:only-child) {
+.web-save-thumbs img:not(:only-child),
+.web-save-thumbs video:not(:only-child) {
   max-width: 62%;
 }
 

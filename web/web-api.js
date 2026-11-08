@@ -273,17 +273,23 @@ ${description.trim()}${refSection}
     panel.className = 'web-save-panel';
     const title = document.createElement('p');
     title.className = 'web-save-title';
-    title.textContent = files.length > 1 ? `${files.length}枚の画像を保存` : '画像を保存';
+    const hasVideo = files.some((f) => f.type.startsWith('video/'));
+    title.textContent = hasVideo
+      ? (files.length > 1 ? `${files.length}件を保存` : '動画を保存')
+      : (files.length > 1 ? `${files.length}枚の画像を保存` : '画像を保存');
     const hint = document.createElement('p');
     hint.className = 'web-save-hint';
-    hint.textContent = '開いたメニューで「画像を保存」を選ぶと写真に入ります。';
+    hint.textContent = hasVideo
+      ? '開いたメニューで「ビデオを保存」（画像は「画像を保存」）を選ぶと写真に入ります。'
+      : '開いたメニューで「画像を保存」を選ぶと写真に入ります。';
     const thumbs = document.createElement('div');
     thumbs.className = 'web-save-thumbs';
     const urls = files.map((f) => URL.createObjectURL(f));
-    urls.forEach((url) => {
-      const img = document.createElement('img');
+    urls.forEach((url, i) => {
+      const isVideo = files[i].type.startsWith('video/');
+      const img = document.createElement(isVideo ? 'video' : 'img');
       img.src = url;
-      img.alt = '';
+      if (isVideo) { img.muted = true; img.playsInline = true; img.preload = 'metadata'; } else img.alt = '';
       thumbs.appendChild(img);
     });
     const save = document.createElement('button');
@@ -328,12 +334,18 @@ ${description.trim()}${refSection}
   const nativeRevoke = URL.revokeObjectURL.bind(URL);
   URL.revokeObjectURL = (url) => { setTimeout(() => nativeRevoke(url), 60000); };
 
-  function makeDownload({ images = [], captions = [], mockups = [], sessionLabel }) {
+  // Finished video posts, handed over by app.js before it asks for the download.
+  const videoUploads = new Map();   // token → Blob
+
+  async function makeDownload({ images = [], captions = [], mockups = [], sessionLabel, videos = [] }) {
     const stamp = new Date().toISOString().slice(0, 10);
     const label = (sessionLabel || 'post').replace(/[^\w぀-鿿]/g, '_').slice(0, 30);
     const folder = `${stamp}_${label}`;
+    const videoOf = (i) => (videos[i] && videoUploads.get(videos[i])) || null;
     if (canShareFiles()) {
-      showSaveSheet(images.map((img, i) => new File([dataUrlBytes(img)], `post_${i + 1}.jpg`, { type: 'image/jpeg' })));
+      showSaveSheet(images.map((img, i) => (videoOf(i)
+        ? new File([videoOf(i)], `post_${i + 1}.mp4`, { type: 'video/mp4' })
+        : new File([dataUrlBytes(img)], `post_${i + 1}.jpg`, { type: 'image/jpeg' }))));
       return new Response(new Blob([]), {
         headers: { 'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${folder}.zip`)}` },
       });
@@ -342,7 +354,9 @@ ${description.trim()}${refSection}
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nキャプション ${i + 1}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n${c}\n`
     ).join('\n') + '\n---\n生成日: ' + new Date().toLocaleString('ja-JP');
     const files = [
-      ...images.map((img, i) => ({ name: `${folder}/post_${i + 1}.jpg`, bytes: dataUrlBytes(img) })),
+      ...await Promise.all(images.map(async (img, i) => (videoOf(i)
+        ? { name: `${folder}/post_${i + 1}.mp4`, bytes: new Uint8Array(await videoOf(i).arrayBuffer()) }
+        : { name: `${folder}/post_${i + 1}.jpg`, bytes: dataUrlBytes(img) }))),
       ...mockups.map((img, i) => ({ name: `${folder}/preview_${i + 1}.jpg`, bytes: dataUrlBytes(img) })),
       { name: `${folder}/captions.txt`, bytes: new TextEncoder().encode(captionText) },
     ];
@@ -418,6 +432,11 @@ ${description.trim()}${refSection}
     }
     if (is('/api/calendar/read-text', 'POST')) return readCalendarText(body);
     if (is('/api/generate-copy', 'POST')) return generateCopy(body);
+    if (is('/api/video-upload', 'POST')) {
+      const token = `v${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      videoUploads.set(token, body);
+      return json({ token });
+    }
     if (is('/api/download', 'POST')) return makeDownload(body);
 
     if (is('/api/icons')) {
@@ -486,7 +505,8 @@ ${description.trim()}${refSection}
   window.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : input.url;
     if (!url.startsWith('/api/')) return nativeFetch(input, init);
-    const body = typeof init.body === 'string' ? JSON.parse(init.body) : {};
+    // JSON bodies are parsed; a Blob (a finished video) is passed through as is.
+    const body = typeof init.body === 'string' ? JSON.parse(init.body) : (init.body instanceof Blob ? init.body : {});
     return route(url.split('?')[0], (init.method || 'GET').toUpperCase(), body);
   };
 
@@ -613,7 +633,7 @@ ${description.trim()}${refSection}
       const hint = document.querySelector('.cal-hint');
       if (hint) hint.textContent = '日付をタップすると変更できます';
       const upload = document.querySelector('#photoInput')?.parentElement?.querySelector('p');
-      if (upload) upload.innerHTML = 'タップして写真を選択';
+      if (upload) upload.innerHTML = 'タップして写真・動画を選択';
 
       // app.js rewrites this button after every save, so the label is fixed up each time.
       const saveButton = document.getElementById('btnDownload');

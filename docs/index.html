@@ -76,7 +76,7 @@
     <section class="panel col-left">
 
       <div class="step">
-        <div class="step-label"><span class="step-num">1</span> 写真をアップロード</div>
+        <div class="step-label"><span class="step-num">1</span> 写真・動画をアップロード</div>
         <div class="drop-zone" id="dropZone">
           <div class="drop-icon">
             <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
@@ -85,8 +85,8 @@
               <line x1="12" y1="3" x2="12" y2="15"/>
             </svg>
           </div>
-          <p>ここに写真をドロップ<br><small>または クリックして選択</small></p>
-          <input type="file" id="photoInput" accept="image/*" multiple hidden>
+          <p>ここに写真・動画をドロップ<br><small>または クリックして選択</small></p>
+          <input type="file" id="photoInput" accept="image/*,video/*,.mov,.mp4,.m4v" multiple hidden>
         </div>
         <div class="photo-thumbs" id="photoThumbs"></div>
         <div class="filter-bar" id="filterBar" hidden>
@@ -207,6 +207,29 @@
             </div>
           </div>
           <canvas id="editPreviewCanvas" width="540" height="675"></canvas>
+          <div class="video-panel" id="videoPanel" hidden>
+            <div class="vp-bar">
+              <button type="button" class="vp-btn vp-play" id="vpPlay" title="再生（スペース）">▶</button>
+              <span class="vp-time" id="vpTime">0:00.0 / 0:00.0</span>
+              <span class="vp-spacer"></span>
+              <button type="button" class="vp-btn" id="vpSplit" title="再生位置で2つに分けます">✂ 分割</button>
+              <button type="button" class="vp-btn" id="vpDelete" title="選んだクリップを消します">削除</button>
+              <button type="button" class="vp-btn" id="vpAdd" title="選んだクリップの後ろに別の動画をつなげます">＋ 動画をつなげる</button>
+              <input type="file" id="vpAddInput" accept="video/*,.mov,.mp4,.m4v" multiple hidden>
+            </div>
+            <div class="vp-timeline">
+              <div class="vp-track" id="vpTrack"></div>
+              <div class="vp-playhead" id="vpPlayhead"></div>
+            </div>
+            <div class="vp-bar vp-bar-sub">
+              <label class="vp-check"><input type="checkbox" id="vpMute"> 音を消す</label>
+              <span class="vp-vol-label">音量</span>
+              <input type="range" id="vpVolume" min="0" max="100" value="100">
+              <span class="ctrl-val" id="vpVolumeVal">100</span>
+              <span class="vp-spacer"></span>
+              <span class="vp-hint">端をドラッグで長さ調整 ／ ドラッグで並べ替え ／ スペースで再生</span>
+            </div>
+          </div>
           <p class="drag-hint">
             <span style="color:#6699DD">▪</span> 写真
             <span style="color:#E4768A">▪</span> キャッチコピー
@@ -873,6 +896,7 @@
 
   <script src="web-api.js"></script>
   <script src="app.js"></script>
+  <script src="video.js"></script>
   <script src="calendar.js"></script>
 </body>
 </html>

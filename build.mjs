@@ -16,9 +16,11 @@ function patch(text, from, to) {
 await rm(docs, { recursive: true, force: true });
 await mkdir(docs, { recursive: true });
 
-for (const file of ['style.css', 'calendar.css', 'calendar-typo.png']) {
+for (const file of ['style.css', 'calendar.css', 'calendar-typo.png', 'video.js']) {
   await cp(path.join(macPublic, file), path.join(docs, file));
 }
+// Video decoding/encoding library (mediabunny, MPL-2.0) and its AAC fallback, with licences.
+await cp(path.join(macPublic, 'vendor'), path.join(docs, 'vendor'), { recursive: true });
 for (const file of await readdir(path.join(root, 'web'))) {
   await cp(path.join(root, 'web', file), path.join(docs, file));
 }
