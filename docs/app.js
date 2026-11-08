@@ -211,7 +211,8 @@ function renderThumbs() {
     `;
     div.addEventListener('click', e => {
       if (e.target.classList.contains('thumb-remove')) {
-        URL.revokeObjectURL(p.url);
+        // The object URL is not revoked: ⌘Z can bring this photo back, and a
+        // pasted 背景の写真 on another image may still point at it.
         imgCache.delete(p.url);
         state.photos.splice(i, 1);
         state.previewPhotoIdx = Math.min(state.previewPhotoIdx, Math.max(0, state.photos.length - 1));
@@ -860,6 +861,7 @@ function initTextEditor(isRegenerate = false) {
         maxWidth:           cfgHl.maxWidth || 780,
         headlineVertical:   false,
         arcRadius:          0,   // 0 = not arched; sign flips upward/downward arch
+        arcApex:            true, // x/y = top of the arch (see ensureArcApex)
         whiteBg:            false,
         whiteBgColor:       '#ffffff',
         whiteBgPad:         16,
@@ -892,6 +894,8 @@ function initTextEditor(isRegenerate = false) {
 
   state.selectedIconId = activePhoto?.icons?.length ? activePhoto.icons[activePhoto.icons.length - 1].id : null;
   state.selectedTextId = null;
+  state.selectedEl = null;
+  if (!isRegenerate) resetHistory();
   renderCtList();
   renderCtSettings();
   renderPlacedIcons();
@@ -1018,7 +1022,7 @@ function applyLayoutSnapshot(photo, snap) {
   if (photo.textStyle) {
     Object.assign(photo.textStyle, {
       fontSize: snap.fontSize, x: snap.x, y: snap.y, maxWidth: snap.maxWidth,
-      headlineVertical: snap.headlineVertical, arcRadius: snap.arcRadius,
+      headlineVertical: snap.headlineVertical, arcRadius: snap.arcRadius, arcApex: true,
       whiteBg: snap.whiteBg, whiteBgColor: snap.whiteBgColor, whiteBgPad: snap.whiteBgPad,
       whiteBgEndTrims: { ...snap.whiteBgEndTrims },
       shadow: { ...snap.shadow }, subShadow: { ...snap.subShadow },
@@ -1178,9 +1182,19 @@ async function drawEditPreview() {
       ctx.restore();
     }
 
+    // Selected 背景の写真 (clicked on empty canvas) — thin blue frame
+    if (state.selectedEl?.type === 'photo') {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(102,153,221,0.9)';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(1.5, 1.5, W - 3, H - 3);
+      ctx.restore();
+    }
+
     // Text
     const ts = state.textStyle;
     if (!ts) return;
+    ensureArcApex(ts);
     const hlFamily = fontFamilyCSS(ts.fontFamily);
     const textX = ts.x * S;
     const textY = ts.y * S;
@@ -1201,7 +1215,7 @@ async function drawEditPreview() {
     // Build layout
     let hlLayout;
     if (ts.arcRadius) {
-      hlLayout = layoutHeadlineArc(ctx, ts.headline, textX, textY, ts.arcRadius * S, letterSpacingPx, lineH, charKernsScaled).layout;
+      hlLayout = layoutHeadlineArc(ctx, ts.headline, textX, textY + ts.arcRadius * S, ts.arcRadius * S, letterSpacingPx, lineH, charKernsScaled).layout;
     } else if (ts.headlineVertical) {
       hlLayout = layoutHeadlineV(ctx, ts.headline, textX, textY, vCharAdvance, vColStep, fontSizePx, charKernsScaled).layout;
     } else {
@@ -1252,15 +1266,16 @@ async function drawEditPreview() {
     if (hlLayout.length) {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const it of hlLayout) {
-        minX = Math.min(minX, it.x); minY = Math.min(minY, it.y);
-        maxX = Math.max(maxX, it.x + (it.vertical ? fontSizePx : it.w));
-        maxY = Math.max(maxY, it.y + fontSizePx);
+        const [x0, y0, x1, y1] = glyphBox(it, fontSizePx);
+        minX = Math.min(minX, x0); minY = Math.min(minY, y0);
+        maxX = Math.max(maxX, x1); maxY = Math.max(maxY, y1);
       }
       const bx = minX - 4, by = minY - 4, bw = (maxX - minX) + 8, bh = (maxY - minY) + 8;
       ctx.save();
       ctx.strokeStyle = 'rgba(228,118,138,0.8)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
+      const hlSel = state.selectedEl?.type === 'headline';
+      ctx.lineWidth = hlSel ? 2 : 1;
+      ctx.setLineDash(hlSel ? [] : [3, 3]);
       ctx.strokeRect(bx, by, bw, bh);
       ctx.restore();
       const hlCorners = [
@@ -1294,8 +1309,9 @@ async function drawEditPreview() {
       const sbw = subDims.width + 4, sbh = subDims.height + 4;
       ctx.save();
       ctx.strokeStyle = 'rgba(68,187,136,0.8)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
+      const subSel = state.selectedEl?.type === 'subtitle';
+      ctx.lineWidth = subSel ? 2 : 1;
+      ctx.setLineDash(subSel ? [] : [3, 3]);
       ctx.strokeRect(sbx, sby, sbw, sbh);
       ctx.restore();
       const subCorners = [
@@ -1579,6 +1595,32 @@ function layoutHeadlineV(ctx, text, x, y, charAdvance, colStep, fontSize, charKe
 // downward (bulges down, like a frown). (cx, cy) is the arc's centre — for an upward
 // arch the text sits ABOVE that point at distance |radius|; multi-line text (\n) stacks
 // onto concentric arcs, each `lineHeight` further from the centre.
+/* Arched headline anchor. ts.x / ts.y used to be the CENTRE of the circle, so
+   switching to アーチ with the default y=148 and radius 500 pushed the text to
+   y≈-352 — off the canvas and impossible to grab. Now (x, y) is the apex of the
+   first line (top-centre for an upward arch, bottom point for a downward one),
+   which always stays where the user put it; the circle centre is y + radius.
+   `arcApex` marks text styles already on the new convention; older projects
+   are converted once (and pulled back on-canvas if they had gone missing). */
+// Screen box of one laid-out glyph. Arched glyphs are centred on it.x and, when
+// the arch is flipped (rotation ≈ π), hang above it.y instead of below.
+function glyphBox(it, fs) {
+  if (it.rotation !== undefined) {
+    const y0 = Math.cos(it.rotation) < 0 ? it.y - fs : it.y;
+    return [it.x - it.w / 2, y0, it.x + it.w / 2, y0 + fs];
+  }
+  return [it.x, it.y, it.x + (it.vertical ? fs : it.w), it.y + fs];
+}
+
+function ensureArcApex(ts) {
+  if (!ts || ts.arcApex) return;
+  if (ts.arcRadius) {
+    ts.y = Math.round(Math.max(0, Math.min(1300, ts.y - ts.arcRadius)));
+    ts.x = Math.round(Math.max(0, Math.min(1000, ts.x)));
+  }
+  ts.arcApex = true;
+}
+
 function layoutHeadlineArc(ctx, text, cx, cy, radius, letterSpacing, lineHeight, charKerns) {
   const layout = [];
   const lines = text.split('\n');
@@ -1596,7 +1638,9 @@ function layoutHeadlineArc(ctx, text, cx, cy, radius, letterSpacing, lineHeight,
       const theta = angle + half;
       const x = cx + r * Math.sin(theta);
       const y = flip ? cy + r * Math.cos(theta) : cy - r * Math.cos(theta);
-      const rotation = flip ? theta + Math.PI : theta;
+      // Downward arch runs along the bottom of the circle: the tangent there is
+      // -theta, which keeps every glyph upright and in reading order.
+      const rotation = flip ? -theta : theta;
       layout.push({ char: ch, x, y, w, vertical: false, rotation, origIdx: origBase + j, lineIdx: li });
       angle += w / r;
     });
@@ -2022,9 +2066,9 @@ editPreviewCanvas.addEventListener('mousedown', e => {
     if (layout && layout.length) {
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const it of layout) {
-        minX = Math.min(minX, it.x); minY = Math.min(minY, it.y);
-        maxX = Math.max(maxX, it.x + (it.vertical ? fsPx : it.w));
-        maxY = Math.max(maxY, it.y + fsPx);
+        const [x0, y0, x1, y1] = glyphBox(it, fsPx);
+        minX = Math.min(minX, x0); minY = Math.min(minY, y0);
+        maxX = Math.max(maxX, x1); maxY = Math.max(maxY, y1);
       }
       if (cx >= minX - 10 && cx <= maxX + 10 && cy >= minY - 10 && cy <= maxY + 10) {
         dragState = { target: 'headline', offX: cx - tx, offY: cy - ty };
@@ -2072,9 +2116,8 @@ editPreviewCanvas.addEventListener('mousemove', e => {
       const layout = state._hlLayout;
       if (layout && layout.length) {
         for (const it of layout) {
-          const ix2 = it.x + (it.vertical ? fsPx : it.w);
-          const iy2 = it.y + fsPx;
-          if (cx >= it.x - 6 && cx <= ix2 + 6 && cy >= it.y - 6 && cy <= iy2 + 6) { onText = true; break; }
+          const [ix1, iy1, ix2, iy2] = glyphBox(it, fsPx);
+          if (cx >= ix1 - 6 && cx <= ix2 + 6 && cy >= iy1 - 6 && cy <= iy2 + 6) { onText = true; break; }
         }
       }
       const subX = ts.subX * S, subY = ts.subY * S;
@@ -2294,6 +2337,18 @@ function setHeadlineOrientation(mode) {
   document.getElementById('ctrlHlVert').classList.toggle('active', mode === 'vertical');
   document.getElementById('ctrlHlArc').classList.toggle('active', mode === 'arc');
   document.getElementById('ctrlArcRadiusRow').hidden = mode !== 'arc';
+  // Keep the text where it is on screen when the mode changes: horizontal and
+  // vertical anchor at the top-left, the arch at its top-centre.
+  const wasArc = !!ts.arcRadius;
+  const b = headlineBounds1080() || measuredHeadlineBounds(ts);
+  if (b && mode === 'arc' && !wasArc) {
+    ts.x = Math.round(Math.max(0, Math.min(1000, (b.minX + b.maxX) / 2)));
+    ts.y = Math.round(Math.max(0, Math.min(1300, b.minY)));
+  } else if (b && mode !== 'arc' && wasArc) {
+    ts.x = Math.round(Math.max(0, Math.min(1000, b.minX)));
+    ts.y = Math.round(Math.max(0, Math.min(1300, b.minY)));
+  }
+  ts.arcApex = true;
   if (mode === 'arc') {
     ts.headlineVertical = false;
     if (!ts.arcRadius) {
@@ -2305,7 +2360,33 @@ function setHeadlineOrientation(mode) {
     ts.headlineVertical = mode === 'vertical';
     ts.arcRadius = 0;
   }
+  syncTextStyleUI();
   schedulePreviewRedraw();
+}
+
+// Fallback when no preview layout exists yet: horizontal text measured directly.
+function measuredHeadlineBounds(ts) {
+  if (ts.arcRadius || ts.headlineVertical) return null;
+  const m = document.createElement('canvas').getContext('2d');
+  m.font = `${ts.fontWeight} ${ts.fontSize}px ${fontFamilyCSS(ts.fontFamily)}`;
+  const lines = (ts.headline || '').split('\n');
+  const w = Math.max(0, ...lines.map(l => m.measureText(l).width + [...l].length * (ts.letterSpacing || 0)));
+  return { minX: ts.x, minY: ts.y, maxX: ts.x + Math.min(w, ts.maxWidth), maxY: ts.y + ts.fontSize };
+}
+
+// Current headline bounds in 1080-space, from the last preview layout.
+function headlineBounds1080() {
+  const layout = state._hlLayout;
+  if (!layout?.length) return null;
+  const S = editPreviewCanvas.width / 1080;
+  const fs = state._fontSizePx || 0;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const it of layout) {
+    const [x0, y0, x1, y1] = glyphBox(it, fs);
+    minX = Math.min(minX, x0); minY = Math.min(minY, y0);
+    maxX = Math.max(maxX, x1); maxY = Math.max(maxY, y1);
+  }
+  return { minX: minX / S, minY: minY / S, maxX: maxX / S, maxY: maxY / S };
 }
 document.getElementById('ctrlHlHoriz').addEventListener('click', () => setHeadlineOrientation('horizontal'));
 document.getElementById('ctrlHlVert').addEventListener('click', () => setHeadlineOrientation('vertical'));
@@ -2425,6 +2506,7 @@ async function compositeImageFor(photo, frame) {
   const H   = cfg.canvasHeight || 1350;
   const ts  = photo.textStyle;
   if (!ts) return null;
+  ensureArcApex(ts);
   const activeHeadline = ts.headline;
 
   const canvas = document.createElement('canvas');
@@ -2478,7 +2560,7 @@ async function compositeImageFor(photo, frame) {
 
   // Build layout (full-resolution, S=1)
   const hlLayout = ts.arcRadius
-    ? layoutHeadlineArc(ctx, activeHeadline, ts.x, ts.y, ts.arcRadius, letterSpacingPx, lineH, charKerns).layout
+    ? layoutHeadlineArc(ctx, activeHeadline, ts.x, ts.y + ts.arcRadius, ts.arcRadius, letterSpacingPx, lineH, charKerns).layout
     : ts.headlineVertical
       ? layoutHeadlineV(ctx, activeHeadline, ts.x, ts.y, vCharAdvance, vColStep, ts.fontSize, charKerns).layout
       : layoutHeadlineH(ctx, activeHeadline, ts.x, ts.y, ts.maxWidth, lineH, letterSpacingPx, charKerns).layout;
@@ -3336,6 +3418,7 @@ function getSelectedIcon() {
 
 function selectIcon(id) {
   state.selectedIconId = id;
+  if (id) state.selectedEl = { type: 'icon', id };
   renderPlacedIcons();
   renderIconSettings();
   schedulePreviewRedraw();
@@ -3500,6 +3583,7 @@ function renderCtList() {
 
 function selectCustomText(id) {
   state.selectedTextId = id;
+  if (id) state.selectedEl = { type: 'text', id };
   // Selecting a text moves the kern cursor with it — an orphaned cursor
   // pointing at a different text's char index would edit the wrong glyph.
   if (state.kernTargetId !== id) { state.kernCursor = null; state.kernTargetId = id; }
@@ -3875,6 +3959,8 @@ function resetProject() {
   renderFrameGrid(state.availableFrames);
   updateGenerateBtn();
   setOutput('empty');
+  state.selectedEl = null;
+  resetHistory();
 }
 
 async function applyProjectData(project) {
@@ -3937,6 +4023,9 @@ async function applyProjectData(project) {
     });
   }
 
+  state.photos.forEach(p => ensureArcApex(p.textStyle));
+  state.selectedEl = null;
+  resetHistory();
   state.previewPhotoIdx = Math.min(project.previewPhotoIdx || 0, Math.max(0, state.photos.length - 1));
 
   renderThumbs();
@@ -4048,3 +4137,280 @@ loadCustomFonts();
 loadHashtags();
 loadAccountName();
 loadIcons();
+
+/* ════════════════════════════════════════
+   Per-element copy & paste (⌘C / ⌘V)
+   Click an element on the preview to select it — 背景の写真, キャッチ,
+   サブタイトル, a logo/icon or an added text — then ⌘C, switch to another
+   image and ⌘V. Everything comes along (font, colour, white background, drop
+   shadow, filters …) and lands at exactly the same position.
+   ════════════════════════════════════════ */
+const HEADLINE_KEYS = ['headline', 'fontFamily', 'fontWeight', 'fontSize', 'color', 'x', 'y', 'maxWidth',
+  'headlineVertical', 'arcRadius', 'arcApex', 'whiteBg', 'whiteBgColor', 'whiteBgPad', 'whiteBgEndTrims',
+  'letterSpacing', 'lineSpacing', 'charKerns', 'shadow'];
+const SUBTITLE_KEYS = ['subtitle', 'showSubtitle', 'subX', 'subY', 'subColor', 'subtitleVertical',
+  'subtitleFontFamily', 'subtitleFontWeight', 'subFontSize', 'subLetterSpacing', 'subLineSpacing', 'subShadow'];
+const PHOTO_KEYS = ['file', 'url', 'filter', 'brightness', 'contrast', 'offset', 'scale', 'rotation', 'bgColor'];
+const EL_LABEL = { photo: '背景の写真', headline: 'キャッチコピー', subtitle: 'サブタイトル', icon: 'アイコン', text: '追加テキスト' };
+const CLIP_MARK = 'tak-dental-ig-element:';
+
+let elementClipboard = null;   // { type, data, token }
+
+const deepCopy = v => (v === undefined ? undefined : structuredClone(v));
+function pickKeys(obj, keys) {
+  const out = {};
+  for (const k of keys) if (obj[k] !== undefined) out[k] = k === 'file' ? obj[k] : deepCopy(obj[k]);
+  return out;
+}
+const newId = prefix => prefix + Date.now() + '_' + Math.random().toString(36).slice(2, 7);
+
+// Map a fresh canvas mousedown (dragState) to the element it grabbed.
+editPreviewCanvas.addEventListener('mousedown', () => {
+  const d = dragState;
+  if (!d) return;
+  let el = null;
+  if (d.target === 'icon') el = { type: 'icon', id: d.iconId };
+  else if (d.target === 'customText') el = { type: 'text', id: d.textId };
+  else if (d.target === 'headline') el = { type: 'headline' };
+  else if (d.target === 'subtitle') el = { type: 'subtitle' };
+  else if (d.target === 'photo') el = { type: 'photo' };
+  else if (d.target === 'resize') {
+    el = d.which === 'icon' ? { type: 'icon', id: d.iconId }
+       : d.which === 'customText' ? { type: 'text', id: d.textId }
+       : { type: d.which };
+  } else if (d.target === 'whiteBgHandle') {
+    el = d.ownerId ? { type: 'text', id: d.ownerId } : { type: 'headline' };
+  }
+  if (el) { state.selectedEl = el; schedulePreviewRedraw(); }
+});
+
+function copySelectedElement() {
+  const photo = state.photos[state.previewPhotoIdx];
+  const el = state.selectedEl;
+  if (!photo || !el) return null;
+  let data = null;
+  if (el.type === 'headline' && photo.textStyle) data = pickKeys(photo.textStyle, HEADLINE_KEYS);
+  else if (el.type === 'subtitle' && photo.textStyle) data = pickKeys(photo.textStyle, SUBTITLE_KEYS);
+  else if (el.type === 'photo') data = pickKeys(photo, PHOTO_KEYS);
+  else if (el.type === 'icon') data = deepCopy((photo.icons || []).find(i => i.id === el.id) || null);
+  else if (el.type === 'text') data = deepCopy((photo.texts || []).find(t => t.id === el.id) || null);
+  if (!data) return null;
+  elementClipboard = { type: el.type, data, token: newId('c') };
+  return elementClipboard;
+}
+
+function pasteElement(clip) {
+  const photo = state.photos[state.previewPhotoIdx];
+  if (!photo || !clip) return false;
+  const data = deepCopy({ ...clip.data, file: undefined });
+  if (clip.type === 'headline' || clip.type === 'subtitle') {
+    if (!photo.textStyle) { showToast('この画像にはまだ文字がありません'); return false; }
+    Object.assign(photo.textStyle, data);
+    if (clip.type === 'subtitle') photo.textStyle.showSubtitle = true;
+    delete photo.textStyle.file;
+    state.selectedEl = { type: clip.type };
+    syncTextStyleUI();
+  } else if (clip.type === 'photo') {
+    Object.assign(photo, data, { file: clip.data.file });
+    state.selectedEl = { type: 'photo' };
+    syncFilterUI(photo);
+    renderThumbs();
+  } else if (clip.type === 'icon') {
+    delete data.file;
+    const icon = { ...data, id: newId('ic_') };
+    photo.icons.push(icon);
+    selectIcon(icon.id);
+  } else if (clip.type === 'text') {
+    delete data.file;
+    if (!photo.texts) photo.texts = [];
+    const t = { ...data, id: newId('tx_') };
+    photo.texts.push(t);
+    selectCustomText(t.id);
+  }
+  schedulePreviewRedraw();
+  return true;
+}
+
+function isEditableTarget(el) {
+  return !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+}
+// Element copy/paste only applies on the editing screen with no dialog open,
+// and never steals ⌘C / ⌘V from a text field or a text selection.
+function elementShortcutsActive() {
+  if (isEditableTarget(document.activeElement)) return false;
+  if (document.getElementById('outputEditing')?.hidden) return false;
+  if ([...document.querySelectorAll('.modal-overlay')].some(m => !m.hidden)) return false;
+  return true;
+}
+const hasTextSelection = () => (window.getSelection()?.toString() || '').length > 0;
+
+// Chromium only runs Copy/Paste outside editable fields when beforecopy /
+// beforepaste are cancelled — this is what makes ⌘C/⌘V (and the Mac app's
+// 編集 menu) reach the handlers below.
+document.addEventListener('beforecopy', e => {
+  if (elementShortcutsActive() && !hasTextSelection() && state.selectedEl) e.preventDefault();
+});
+document.addEventListener('beforepaste', e => {
+  if (!isEditableTarget(document.activeElement)) e.preventDefault();
+});
+document.addEventListener('copy', e => {
+  if (!elementShortcutsActive() || hasTextSelection()) return;
+  const clip = copySelectedElement();
+  if (!clip) return;
+  e.preventDefault();
+  e.clipboardData.setData('text/plain', CLIP_MARK + clip.token);
+  showToast(`${EL_LABEL[clip.type]}をコピーしました`);
+});
+document.addEventListener('paste', e => {
+  if (!elementShortcutsActive() || !elementClipboard) return;
+  const text = e.clipboardData?.getData('text/plain') || '';
+  // Only paste while the system clipboard still holds our copy — copying
+  // something else in between (in any app) cancels it.
+  if (text !== CLIP_MARK + elementClipboard.token) return;
+  e.preventDefault();
+  if (pasteElement(elementClipboard)) showToast(`${EL_LABEL[elementClipboard.type]}を貼り付けました`);
+});
+
+/* ════════════════════════════════════════
+   Undo / redo (⌘Z / ⇧⌘Z)
+   Snapshots of every image's editable state. A change is recorded once it
+   settles: when the mouse is released, a control commits ('change'), or after
+   a short pause (typing, keyboard kerning). One drag = one undo step.
+   ════════════════════════════════════════ */
+const undoHistory = { undo: [], redo: [], last: null, lastKey: null, timer: null, restoring: false, pointerDown: false };
+const UNDO_LIMIT = 100;
+const bigStrings = new Map();   // long data:/blob: strings → short ids, for cheap comparison
+
+function editorSnapshot() {
+  return {
+    idx: state.previewPhotoIdx,
+    photos: state.photos.map(p => ({
+      ...p,
+      offset: { ...p.offset },
+      textStyle: p.textStyle ? deepCopy(p.textStyle) : null,
+      icons: deepCopy(p.icons || []),
+      texts: deepCopy(p.texts || []),
+    })),
+  };
+}
+function photoKeys(snap) {
+  return snap.photos.map(p => JSON.stringify(p, (k, v) => {
+    if (k === 'file') return undefined;
+    if (typeof v === 'string' && v.length > 200) {
+      if (!bigStrings.has(v)) bigStrings.set(v, bigStrings.size);
+      return '#' + bigStrings.get(v);
+    }
+    return v;
+  }));
+}
+const snapshotKey = snap => photoKeys(snap).join('\u0000');
+
+function commitHistory() {
+  clearTimeout(undoHistory.timer);
+  undoHistory.timer = null;
+  if (undoHistory.restoring) return;
+  const snap = editorSnapshot();
+  const keys = photoKeys(snap);
+  const key = keys.join('\u0000');
+  if (undoHistory.lastKey === null) { undoHistory.last = snap; undoHistory.lastKey = key; undoHistory.lastKeys = keys; return; }
+  if (key === undoHistory.lastKey) return;
+  // Remember which image this change touched, so undo/redo can show it.
+  const old = undoHistory.lastKeys || [];
+  let changed = keys.findIndex((k, i) => k !== old[i]);
+  if (changed < 0) changed = Math.max(0, keys.length - 1);
+  snap.changedIdx = changed;
+  undoHistory.lastKeys = keys;
+  undoHistory.undo.push(undoHistory.last);
+  if (undoHistory.undo.length > UNDO_LIMIT) undoHistory.undo.shift();
+  undoHistory.redo = [];
+  undoHistory.last = snap;
+  undoHistory.lastKey = key;
+}
+function scheduleHistoryCommit() {
+  if (undoHistory.restoring) return;
+  clearTimeout(undoHistory.timer);
+  undoHistory.timer = setTimeout(() => {
+    if (undoHistory.pointerDown) return;   // committed on pointerup instead
+    commitHistory();
+  }, 600);
+}
+// Start a fresh history (new copy generated, project opened, new project).
+function resetHistory() {
+  undoHistory.undo = []; undoHistory.redo = [];
+  undoHistory.last = null; undoHistory.lastKey = null;
+  commitHistory();
+}
+
+// `showIdx`: which image to show afterwards — the one the undone/redone change
+// was made on, so the user sees what just changed.
+function restoreSnapshot(snap, showIdx = snap.idx) {
+  undoHistory.restoring = true;
+  state.photos = snap.photos.map(p => ({
+    ...p,
+    offset: { ...p.offset },
+    textStyle: p.textStyle ? deepCopy(p.textStyle) : null,
+    icons: deepCopy(p.icons),
+    texts: deepCopy(p.texts),
+  }));
+  const idx = Math.max(0, Math.min(showIdx, state.photos.length - 1));
+  // Keep a selection only if what it points at still exists.
+  const p = state.photos[idx];
+  const sel = state.selectedEl;
+  if (sel?.type === 'icon' && !p?.icons.some(i => i.id === sel.id)) state.selectedEl = null;
+  if (sel?.type === 'text' && !p?.texts.some(t => t.id === sel.id)) state.selectedEl = null;
+  const keepText = state.selectedTextId;
+  switchToPhoto(idx);
+  if (keepText && p?.texts.some(t => t.id === keepText)) { state.selectedTextId = keepText; renderCtList(); renderCtSettings(); }
+  renderFrameGrid(state.availableFrames);
+  updateGenerateBtn();
+  const changedIdx = snap.changedIdx;
+  undoHistory.last = editorSnapshot();
+  undoHistory.last.changedIdx = changedIdx;
+  undoHistory.lastKeys = photoKeys(undoHistory.last);
+  undoHistory.lastKey = undoHistory.lastKeys.join('\u0000');
+  undoHistory.restoring = false;
+}
+function undo() {
+  commitHistory();                       // fold in a change still settling
+  const prev = undoHistory.undo.pop();
+  if (!prev) { showToast('これ以上取り消せません'); return; }
+  const changedOn = undoHistory.last.changedIdx ?? undoHistory.last.idx;
+  undoHistory.redo.push(undoHistory.last);
+  restoreSnapshot(prev, changedOn);
+}
+function redo() {
+  commitHistory();
+  const next = undoHistory.redo.pop();
+  if (!next) return;
+  undoHistory.undo.push(undoHistory.last);
+  restoreSnapshot(next, next.changedIdx ?? next.idx);
+}
+
+// Every edit in this app ends in a preview redraw (or a thumbnail refresh for
+// adding/removing/reordering images), so recording hooks in there.
+const _schedulePreviewRedraw = schedulePreviewRedraw;
+schedulePreviewRedraw = function () { _schedulePreviewRedraw(); scheduleHistoryCommit(); };
+const _renderThumbs = renderThumbs;
+renderThumbs = function () { _renderThumbs(); scheduleHistoryCommit(); };
+
+window.addEventListener('pointerdown', () => { undoHistory.pointerDown = true; }, true);
+window.addEventListener('pointerup', () => {
+  undoHistory.pointerDown = false;
+  if (undoHistory.timer) setTimeout(commitHistory, 0);
+}, true);
+document.addEventListener('change', () => setTimeout(commitHistory, 0), true);
+
+window.addEventListener('keydown', e => {
+  if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+  const k = e.key.toLowerCase();
+  const isUndo = k === 'z' && !e.shiftKey;
+  const isRedo = (k === 'z' && e.shiftKey) || k === 'y';
+  if (!isUndo && !isRedo) return;
+  // Text fields keep their own native undo.
+  if (isEditableTarget(document.activeElement)) return;
+  if ([...document.querySelectorAll('.modal-overlay')].some(m => !m.hidden)) return;
+  e.preventDefault();
+  if (isUndo) undo(); else redo();
+});
+
+commitHistory();   // baseline
