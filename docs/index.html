@@ -222,9 +222,10 @@
             <button class="cap-tab" data-idx="1">語りかけ</button>
             <button class="cap-tab" data-idx="2">フレンドリー</button>
           </div>
-          <div class="caption-body" id="captionBody"></div>
+          <textarea class="caption-body" id="captionBody" spellcheck="false" aria-label="投稿文"></textarea>
+          <p class="caption-edit-hint">文章とハッシュタグは直接書き換えられます。コピーと書き出しには直した内容が入ります。</p>
           <div class="hashtag-section">
-            <div class="hashtag-label">マイハッシュタグ <span class="hashtag-hint">（生成文に自動付加）</span></div>
+            <div class="hashtag-label">マイハッシュタグ <span class="hashtag-hint">（コピー時に文章の最後へ自動付加）</span></div>
             <textarea id="myHashtags" class="hashtag-input" placeholder="#旭川歯科 #たかはし歯科 #北海道歯科 ..." rows="2"></textarea>
           </div>
           <button class="btn-copy" id="btnCopy">

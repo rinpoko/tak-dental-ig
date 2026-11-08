@@ -617,12 +617,37 @@ textarea::placeholder {
 }
 
 .caption-body {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   padding: 16px 18px;
+  font-family: var(--font-ja);
   font-size: 13px;
   line-height: 1.75;
   white-space: pre-wrap;
   min-height: 120px;
   color: var(--text);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  resize: vertical;
+  overflow: hidden;
+}
+
+.caption-body:hover {
+  border-color: var(--border);
+}
+
+.caption-body:focus {
+  outline: none;
+  border-color: var(--salmon);
+  background: #242424;
+}
+
+.caption-edit-hint {
+  margin: 4px 18px 0;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .btn-copy {

@@ -2306,16 +2306,42 @@ document.getElementById('ctrlSubVert').addEventListener('click', () => {
 
 // ── Caption tabs ──
 let activeCaptionIdx = 0;
+function fitCaptionBody() {
+  captionBody.style.height = 'auto';
+  captionBody.style.height = captionBody.scrollHeight + 'px';
+}
 function renderCaption(idx) {
-  captionBody.textContent = state.generatedCopy?.captions?.[idx] || '';
+  captionBody.value = state.generatedCopy?.captions?.[idx] || '';
   document.querySelectorAll('.cap-tab').forEach((tab, i) => tab.classList.toggle('active', i === idx));
   activeCaptionIdx = idx;
+  requestAnimationFrame(fitCaptionBody);
 }
+// Edits replace the generated text, so copy, export and saved projects all use the corrected
+// version. Regenerating overwrites them.
+captionBody.addEventListener('input', () => {
+  const captions = state.generatedCopy?.captions;
+  if (captions) captions[activeCaptionIdx] = captionBody.value;
+  fitCaptionBody();
+});
 captionTabs.addEventListener('click', e => {
   if (e.target.classList.contains('cap-tab')) renderCaption(+e.target.dataset.idx);
 });
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // Older WebKit refuses the async API outside a direct tap; a selected textarea still copies.
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0;';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
+}
 btnCopy.addEventListener('click', async () => {
-  const text = captionWithHashtags(activeCaptionIdx);
+  await copyText(captionWithHashtags(activeCaptionIdx));
   btnCopy.classList.add('copied');
   btnCopy.textContent = '✓ コピーしました';
   setTimeout(() => {
