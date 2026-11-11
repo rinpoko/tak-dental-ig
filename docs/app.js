@@ -1265,8 +1265,7 @@ async function drawEditPreview() {
     ctx.save();
     ctx.fillStyle = ts.color;
     ctx.textBaseline = 'top';
-    applyTextShadow(ctx, ts.shadow, S);
-    drawCharLayout(ctx, hlLayout, fontSizePx);
+    drawTextShadowed(ctx, ts.shadow, S, c => drawCharLayout(c, hlLayout, fontSizePx));
     ctx.restore();
 
     // Kern cursor indicator (orange line at the gap)
@@ -1310,8 +1309,7 @@ async function drawEditPreview() {
       ctx.save();
       ctx.fillStyle = ts.subColor || subFrameCfg.color || '#2a2a2a';
       ctx.font = `${ts.subtitleFontWeight || '400'} ${subSz}px ${subFamily}`;
-      applyTextShadow(ctx, ts.subShadow, S);
-      const subDims = renderSubtitleLines(ctx, ts.subtitle, subX, subY, subSz, subLS, (subFrameCfg.letterSpacing ?? 3) * S, subLineSpacingPct, ts.subtitleVertical, true);
+      const subDims = drawTextShadowed(ctx, ts.subShadow, S, c => renderSubtitleLines(c, ts.subtitle, subX, subY, subSz, subLS, (subFrameCfg.letterSpacing ?? 3) * S, subLineSpacingPct, ts.subtitleVertical, true));
       ctx.restore();
       state._subDims = subDims;
 
@@ -1388,8 +1386,7 @@ async function drawEditPreview() {
       ctx.save();
       ctx.fillStyle = t.color;
       ctx.textBaseline = 'top';
-      applyTextShadow(ctx, t.shadow, S);
-      drawCharLayout(ctx, layoutT, fsT);
+      drawTextShadowed(ctx, t.shadow, S, c => drawCharLayout(c, layoutT, fsT));
       ctx.restore();
 
       drawKernCursor(ctx, layoutT, fsT, lsT, kernsT, t.id);
@@ -1681,6 +1678,33 @@ function applyTextShadow(ctx, sh, S = 1) {
   ctx.shadowBlur = (sh.blur ?? 0) * S;
   ctx.shadowOffsetX = (sh.x ?? 0) * S;
   ctx.shadowOffsetY = (sh.y ?? 0) * S;
+}
+
+// A drop shadow belongs to the whole text, not each letter: the text is drawn on
+// its own transparent layer first, then that layer goes onto the canvas with one
+// shadow. A wide blur then spreads behind the text and never over a neighbouring
+// letter. Returns whatever `draw` returns.
+let textShadowLayer = null;
+function drawTextShadowed(ctx, sh, S, draw) {
+  if (!sh || !sh.on) return draw(ctx);
+  const W = ctx.canvas.width, H = ctx.canvas.height;
+  if (!textShadowLayer) textShadowLayer = document.createElement('canvas');
+  const layer = textShadowLayer;
+  if (layer.width !== W || layer.height !== H) { layer.width = W; layer.height = H; }
+  const lctx = layer.getContext('2d');
+  lctx.setTransform(1, 0, 0, 1, 0, 0);
+  lctx.clearRect(0, 0, W, H);
+  lctx.setTransform(ctx.getTransform());
+  for (const k of ['font', 'fillStyle', 'textBaseline', 'textAlign', 'direction', 'letterSpacing', 'fontKerning']) {
+    if (k in ctx) lctx[k] = ctx[k];
+  }
+  const result = draw(lctx);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  applyTextShadow(ctx, sh, S);
+  ctx.drawImage(layer, 0, 0);
+  ctx.restore();
+  return result;
 }
 
 function drawCharLayout(ctx, layout, fontSize) {
@@ -2585,8 +2609,7 @@ async function compositeImageFor(photo, frame, opts = {}) {
   ctx.save();
   ctx.fillStyle = ts.color;
   ctx.textBaseline = 'top';
-  applyTextShadow(ctx, ts.shadow);
-  drawCharLayout(ctx, hlLayout, ts.fontSize);
+  drawTextShadowed(ctx, ts.shadow, 1, c => drawCharLayout(c, hlLayout, ts.fontSize));
   ctx.restore();
 
   // Subtitle (\n = 2+ lines/columns)
@@ -2599,8 +2622,7 @@ async function compositeImageFor(photo, frame, opts = {}) {
     ctx.save();
     ctx.fillStyle = ts.subColor || sub.color || '#333';
     ctx.font = `${ts.subtitleFontWeight || '400'} ${subSz}px ${subFamily}`;
-    applyTextShadow(ctx, ts.subShadow);
-    renderSubtitleLines(ctx, ts.subtitle, ts.subX, ts.subY, subSz, subLS, sub.letterSpacing ?? 3, subLineSpacingPct, ts.subtitleVertical, true);
+    drawTextShadowed(ctx, ts.subShadow, 1, c => renderSubtitleLines(c, ts.subtitle, ts.subX, ts.subY, subSz, subLS, sub.letterSpacing ?? 3, subLineSpacingPct, ts.subtitleVertical, true));
     ctx.restore();
   }
 
@@ -2622,8 +2644,7 @@ async function compositeImageFor(photo, frame, opts = {}) {
     ctx.save();
     ctx.fillStyle = t.color;
     ctx.textBaseline = 'top';
-    applyTextShadow(ctx, t.shadow);
-    drawCharLayout(ctx, layoutT, t.fontSize);
+    drawTextShadowed(ctx, t.shadow, 1, c => drawCharLayout(c, layoutT, t.fontSize));
     ctx.restore();
   }
 
