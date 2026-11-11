@@ -262,6 +262,9 @@ ${description.trim()}${refSection}
     return new Blob([...parts, ...central, end], { type: 'application/zip' });
   }
 
+  // app.js builds the GitHub版 project ZIP with this (saveProjectAsZip).
+  window.webBuildZip = buildZip;
+
   /* ── Saving on a phone ───────────────────────────────────── */
   // iOS only opens the share sheet straight from a tap, and rendering takes longer than that
   // allows. So the file is prepared first and this sheet supplies the tap.
@@ -274,18 +277,28 @@ ${description.trim()}${refSection}
     const title = document.createElement('p');
     title.className = 'web-save-title';
     const hasVideo = files.some((f) => f.type.startsWith('video/'));
-    title.textContent = hasVideo
+    const isProject = files.some((f) => /\.zip$/i.test(f.name));
+    title.textContent = isProject ? 'プロジェクトを保存' : hasVideo
       ? (files.length > 1 ? `${files.length}件を保存` : '動画を保存')
       : (files.length > 1 ? `${files.length}枚の画像を保存` : '画像を保存');
     const hint = document.createElement('p');
     hint.className = 'web-save-hint';
-    hint.textContent = hasVideo
+    hint.textContent = isProject
+      ? '開いたメニューで「"ファイル"に保存」を選んでください。'
+      : hasVideo
       ? '開いたメニューで「ビデオを保存」（画像は「画像を保存」）を選ぶと写真に入ります。'
       : '開いたメニューで「画像を保存」を選ぶと写真に入ります。';
     const thumbs = document.createElement('div');
     thumbs.className = 'web-save-thumbs';
     const urls = files.map((f) => URL.createObjectURL(f));
     urls.forEach((url, i) => {
+      if (!/^(image|video)\//.test(files[i].type)) {
+        const name = document.createElement('p');
+        name.className = 'web-save-filename';
+        name.textContent = files[i].name;
+        thumbs.appendChild(name);
+        return;
+      }
       const isVideo = files[i].type.startsWith('video/');
       const img = document.createElement(isVideo ? 'video' : 'img');
       img.src = url;
@@ -323,9 +336,10 @@ ${description.trim()}${refSection}
   HTMLAnchorElement.prototype.click = function click() {
     if (!this.download || !canShareFiles()) return nativeAnchorClick.call(this);
     const { download: name, href } = this;
-    if (/\.zip$/i.test(name)) return undefined;  // The sheet already opened for these images.
+    // The post ZIP: the sheet already opened for its images. A project ZIP is shared as is.
+    if (/\.zip$/i.test(name) && !this.dataset.project) return undefined;
     nativeFetch(href).then((r) => r.blob()).then((blob) => {
-      showSaveSheet([new File([blob], name, { type: blob.type || 'image/png' })]);
+      showSaveSheet([new File([blob], name, { type: blob.type || (/\.zip$/i.test(name) ? 'application/zip' : 'image/png') })]);
     }).catch(() => nativeAnchorClick.call(this));
     return undefined;
   };

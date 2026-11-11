@@ -4124,8 +4124,40 @@ function extractBundleImages(projectObj) {
   return images;
 }
 
+// Browser (GitHub版): the same folder bundle as the Mac app, delivered as a ZIP —
+// <name>/<name>.tak + images/ + videos/. Unzipped, it opens in either version.
+let lastWebProjectName = null;
+async function saveProjectAsZip() {
+  if (!window.webBuildZip) { showToast('この機能はこの環境では使えません'); return; }
+  const today = new Date().toLocaleDateString('sv-SE');   // YYYY-MM-DD
+  const answer = prompt('保存するプロジェクトの名前', lastWebProjectName || `たかはし歯科IG_${today}`);
+  if (answer === null) return;
+  const base = (answer.trim() || `たかはし歯科IG_${today}`).replace(/[\\/:*?"<>|]/g, '_').slice(0, 60);
+  lastWebProjectName = base;
+  showToast('保存用のファイルを作っています…', 2500);
+  const { project, videoFiles } = await collectProjectWithVideos();
+  const images = extractBundleImages(project);
+  const bytesOf = async dataUrl => new Uint8Array(await (await fetch(dataUrl)).arrayBuffer());
+  const files = [{ name: `${base}/${base}.tak`, bytes: new TextEncoder().encode(JSON.stringify(project)) }];
+  for (const img of images) files.push({ name: `${base}/images/${img.name}`, bytes: await bytesOf(img.dataUrl) });
+  for (const v of videoFiles) files.push({ name: `${base}/videos/${v.name}`, bytes: v.bytes });
+  const url = URL.createObjectURL(window.webBuildZip(files));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${base}.zip`;
+  a.dataset.project = '1';
+  a.click();
+  URL.revokeObjectURL(url);
+  const vids = videoFiles.length ? `・動画${videoFiles.length}点` : '';
+  showToast(`ZIPで保存しました（画像${images.length}点${vids}）。展開したフォルダを「開く」で開けます`, 4500);
+}
+
 async function saveProjectFlow(forceSaveAs) {
-  if (!window.electronAPI) { showToast('この機能はデスクトップアプリでのみ利用できます'); return; }
+  if (!window.electronAPI) {
+    if (!state.photos.length) { showToast('保存する内容がありません'); return; }
+    try { await saveProjectAsZip(); } catch (err) { showToast('保存に失敗しました: ' + err.message, 4000); }
+    return;
+  }
   if (!state.photos.length) { showToast('保存する内容がありません'); return; }
   try {
     const { project: projectObj, videoFiles } = await collectProjectWithVideos();
@@ -4217,6 +4249,17 @@ async function openProjectFlow() {
 }
 
 btnSaveProject.addEventListener('click', () => saveProjectFlow(false));
+// The Mac app's menu handles ⌘S / ⌘O; in the browser they'd save or open the page itself.
+if (!window.electronAPI) {
+  window.addEventListener('keydown', e => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+    const k = e.key.toLowerCase();
+    if (k !== 's' && k !== 'o') return;
+    if ([...document.querySelectorAll('.modal-overlay')].some(m => !m.hidden)) return;
+    e.preventDefault();
+    if (k === 's') saveProjectFlow(false); else openProjectFlow();
+  });
+}
 btnOpenProject.addEventListener('click', () => openProjectFlow());
 
 if (window.electronAPI) {
