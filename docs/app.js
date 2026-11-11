@@ -3934,6 +3934,115 @@ async function frameToSnapshot(frame) {
   }
 }
 
+/* ── Logos and uploaded fonts travel inside the project ──
+   A project opened on another device (or the GitHub版) may not have the logos
+   it uses, and won't have fonts that were added on this one — without them a
+   logo vanishes and text falls back to another font, changing the spacing. */
+function projectFontNames() {
+  const names = new Set();
+  for (const p of state.photos) {
+    const ts = p.textStyle;
+    if (ts?.fontFamily) names.add(ts.fontFamily);
+    if (ts?.subtitleFontFamily) names.add(ts.subtitleFontFamily);
+    for (const t of p.texts || []) if (t.fontFamily) names.add(t.fontFamily);
+  }
+  return names;
+}
+
+function fontExtOf(bytes, filename) {
+  const fromName = (filename || '').match(/\.(ttf|otf|woff2?)$/i)?.[1]?.toLowerCase();
+  if (fromName) return fromName;
+  const sig = String.fromCharCode(...bytes.slice(0, 4));
+  return sig === 'OTTO' ? 'otf' : sig === 'wOFF' ? 'woff' : sig === 'wOF2' ? 'woff2' : 'ttf';
+}
+
+async function collectProjectAssets() {
+  const icons = {};
+  for (const p of state.photos) {
+    for (const ic of p.icons || []) {
+      if (!ic.src || ic.src.startsWith('data:') || icons[ic.src]) continue;
+      try {
+        const res = await fetch(ic.src);
+        const blob = await res.blob();
+        if (res.ok && blob.type.startsWith('image/')) icons[ic.src] = await fileToDataURL(blob);
+      } catch { /* unreadable — leave out */ }
+    }
+  }
+  const fonts = [];
+  for (const name of projectFontNames()) {
+    const entry = state.customFonts.find(f => f.name === name);
+    if (!entry) continue;   // a font installed on the Mac itself can't be carried along
+    try {
+      const dataUrl = await blobUrlToDataURL(entry.url);
+      const bytes = new Uint8Array(await (await fetch(dataUrl)).arrayBuffer());
+      fonts.push({ name, ext: fontExtOf(bytes, entry.filename), dataUrl });
+    } catch { /* unreadable — leave out */ }
+  }
+  return { icons, fonts };
+}
+
+// Is this font usable here (installed, or added in this app)? Text measured in
+// it differs from the generic fallbacks unless it's missing.
+function fontAvailable(name) {
+  const c = document.createElement('canvas').getContext('2d');
+  const sample = 'あいうアイウ漢字ABCabc123';
+  return ['monospace', 'serif', 'sans-serif'].some(fb => {
+    c.font = `40px ${fb}`;
+    const base = c.measureText(sample).width;
+    c.font = `40px "${name.replace(/"/g, '')}", ${fb}`;
+    return c.measureText(sample).width !== base;
+  });
+}
+
+async function restoreProjectAssets(project) {
+  const assets = project.assets || {};
+  // Fonts: add the project's uploaded fonts to this app when they're missing here.
+  for (const f of assets.fonts || []) {
+    if (state.customFonts.some(c => c.name === f.name) || fontAvailable(f.name)) continue;
+    try {
+      const res = await fetch('/api/custom-fonts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: f.name, base64: f.dataUrl, ext: f.ext }),
+      });
+      const entry = await res.json();
+      if (!res.ok) continue;
+      state.customFonts.push(entry);
+      injectFontFace(entry);
+      if (!state.systemFonts.includes(entry.name)) state.systemFonts.unshift(entry.name);
+      if (!state.selectedFonts.includes(entry.name)) {
+        state.selectedFonts.push(entry.name);
+        state.selectedFonts.sort((a, b) => a.localeCompare(b));
+      }
+    } catch { /* keep going */ }
+  }
+  if ((assets.fonts || []).length) { populateFontSelects(); saveSelectedFonts().catch(() => {}); }
+  // Logos: "/icons/x.png" points at the site root, which is wrong for the
+  // GitHub版 (served under /tak-dental-ig/) — try it relative first, then the
+  // copy saved in the project.
+  for (const sp of project.photos || []) {
+    for (const ic of sp.icons || []) {
+      if (!ic.src || ic.src.startsWith('data:')) continue;
+      const tries = ic.src.startsWith('/icons/') ? [ic.src.slice(1), ic.src] : [ic.src];
+      let ok = null;
+      for (const t of tries) { try { await cachedImg(t); ok = t; break; } catch { /* next */ } }
+      ic.src = ok || assets.icons?.[ic.src] || ic.src;
+    }
+  }
+}
+
+// After opening: wait for the project's fonts, and say which ones this device lacks.
+async function checkProjectFonts() {
+  const names = [...projectFontNames()];
+  await Promise.all(names.flatMap(n => ['400', '700', '900'].map(w =>
+    document.fonts.load(`${w} 16px "${n.replace(/"/g, '')}"`).catch(() => {}))));
+  schedulePreviewRedraw();
+  const missing = names.filter(n => !state.customFonts.some(c => c.name === n) && !fontAvailable(n));
+  if (missing.length) {
+    showToast(`この端末にないフォントがあるため、別のフォントで表示しています: ${missing.join('、')}`, 7000);
+  }
+}
+
 async function collectProjectData() {
   const photos = [];
   for (const p of state.photos) {
@@ -3971,6 +4080,7 @@ async function collectProjectData() {
     generatedCopy: state.generatedCopy ? JSON.parse(JSON.stringify(state.generatedCopy)) : null,
     previewPhotoIdx: state.previewPhotoIdx,
     photos,
+    assets: await collectProjectAssets(),
   };
 }
 
@@ -4036,6 +4146,7 @@ async function applyProjectData(project, videoBytes = {}) {
     throw new Error('無効なプロジェクトファイルです');
   }
   await restoreVideoSources(project.videoSources, videoBytes);
+  await restoreProjectAssets(project);
 
   state.photos.forEach(p => { if (p.url?.startsWith('blob:')) URL.revokeObjectURL(p.url); });
   state.photos = [];
@@ -4204,6 +4315,7 @@ async function loadProjectFromContent(content, filePath, videos) {
     await applyProjectData(project, videos);
     state.currentProjectPath = filePath || null;
     showToast('プロジェクトを開きました');
+    await checkProjectFonts();
   } catch (err) {
     showToast('プロジェクトファイルの読み込みに失敗しました: ' + err.message, 4000);
   }
@@ -4298,6 +4410,9 @@ if (window.electronAPI) {
     else showToast('先に「合成して確定」を行ってください');
   });
 }
+
+// A font that finishes loading after the first draw changes text widths — redraw.
+document.fonts?.addEventListener?.('loadingdone', () => { if (!outputEditing.hidden) schedulePreviewRedraw(); });
 
 /* ── Init ── */
 loadFrames();
