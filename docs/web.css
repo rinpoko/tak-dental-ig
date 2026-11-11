@@ -1,8 +1,8 @@
 /* Web build additions on top of the Mac app's style.css. */
 
-/* Desktop-only actions: project files need the Electron file dialogs, Finder is the Mac's,
-   and the Ollama fallback needs a local server. */
-#btnOpenProject,
+/* Desktop-only actions: saving a project writes a folder through the Electron file dialogs,
+   Finder is the Mac's, and the Ollama fallback needs a local server. 開く stays: the browser
+   opens a Mac-saved project folder itself (openProjectFromFiles in app.js). */
 #btnSaveProject,
 #btnOpenOutput,
 .form-group:has(#modelSelect) {

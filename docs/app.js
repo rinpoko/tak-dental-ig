@@ -4156,8 +4156,60 @@ async function loadProjectFromContent(content, filePath, videos) {
   }
 }
 
+// Browser (GitHub版): a Mac-saved project is a folder — <name>.tak plus
+// images/ and videos/. The browser can only read files the user picks, so the
+// whole folder is picked (or, where folders can't be picked, e.g. iPhone, the
+// .tak and its photos together) and the .tak's references are matched to them.
+async function openProjectFromFiles(fileList) {
+  const files = [...fileList];
+  const tak = files.find(f => /\.tak$/i.test(f.name));
+  if (!tak) { showToast('.tak ファイルが見つかりません。保存したプロジェクトのフォルダを選んでください', 4500); return; }
+  try {
+    const project = JSON.parse(await tak.text());
+    const relPath = f => f.webkitRelativePath || f.name;
+    const baseDir = relPath(tak).slice(0, relPath(tak).length - tak.name.length);
+    const byPath = new Map(), byName = new Map();
+    for (const f of files) {
+      const rel = relPath(f);
+      if (rel.startsWith(baseDir)) byPath.set(rel.slice(baseDir.length), f);
+      if (!byName.has(f.name)) byName.set(f.name, f);
+    }
+    const find = ref => byPath.get(ref) || byName.get(ref.split('/').pop());
+    let missing = 0;
+    for (const p of project.photos || []) {
+      if (p.dataUrl || !p.imageFile) continue;
+      const f = find(p.imageFile);
+      if (f) p.dataUrl = await fileToDataURL(f); else missing++;
+    }
+    const videos = {};
+    for (const v of project.videoSources || []) {
+      const f = v.videoFile && find(v.videoFile);
+      if (f) videos[v.id] = new Uint8Array(await f.arrayBuffer()); else missing++;
+    }
+    await loadProjectFromContent(JSON.stringify(project), null, videos);
+    if (missing) showToast(`開きましたが、${missing}点の写真・動画が見つかりませんでした`, 4500);
+  } catch (err) {
+    showToast('プロジェクトファイルの読み込みに失敗しました: ' + err.message, 4500);
+  }
+}
+
+function pickProjectInBrowser() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  // Folders can be picked on computers; touch devices pick the files instead.
+  const canPickFolder = 'webkitdirectory' in input && !matchMedia('(hover: none) and (pointer: coarse)').matches;
+  if (canPickFolder) input.webkitdirectory = true;
+  else { input.multiple = true; }
+  input.hidden = true;
+  document.body.appendChild(input);   // iOS Safari only opens the picker for an input in the page
+  input.addEventListener('change', () => { if (input.files.length) openProjectFromFiles(input.files); input.remove(); });
+  if (canPickFolder) showToast('保存したプロジェクトのフォルダを選んでください', 3000);
+  else showToast('.tak ファイルと images フォルダの写真をまとめて選んでください', 4000);
+  input.click();
+}
+
 async function openProjectFlow() {
-  if (!window.electronAPI) { showToast('この機能はデスクトップアプリでのみ利用できます'); return; }
+  if (!window.electronAPI) { pickProjectInBrowser(); return; }
   const result = await window.electronAPI.openProject();
   if (result.canceled) return;
   if (result.error) { showToast('開けませんでした: ' + result.error, 4000); return; }
